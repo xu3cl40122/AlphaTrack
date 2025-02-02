@@ -12,6 +12,7 @@ import (
 	"os"
 	"sync"
 	"time"
+
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/xuri/excelize/v2"
@@ -20,10 +21,12 @@ import (
 type Config struct {
 	URL             string              `json:"url"`
 	CategoryMap     map[string][]string `json:"categoryMap"`
+	WeekCategoryMap map[string][]string `json:"weekCategoryMap"`
+	Target          string              `json:"target"`
 	Headless        bool                `json:"headless"`
 	OutputPath      string              `json:"outputPath"`
 	CountOptionList []string            `json:"countOptionList"`
-	ConcurrentCount int            `json:"concurrentCount"`
+	ConcurrentCount int                 `json:"concurrentCount"`
 }
 
 func main() {
@@ -39,24 +42,13 @@ func main() {
 	// 創建一個帶緩衝的 channel 作為信號量，限制同時運行的 goroutine 數量
 	sem := make(chan struct{}, config.ConcurrentCount)
 
-	for tabName, categoryList := range config.CategoryMap {
-		wg.Add(1)
-		go func(fileName, url string) {
-			defer wg.Done()
-			sem <- struct{}{}        // 獲取信號量
-			defer func() { <-sem }() // 釋放信號量
-
-			startTime := time.Now()
-			log.Printf("Processing %s", fileName)
-			err := processURL(fileName, config, categoryList, f)
-			if err != nil {
-				log.Printf("Error processing %s: %v", fileName, err)
-				return
-			}
-			elapsedTime := time.Since(startTime).Round(time.Second)
-			log.Printf("Finished %s took %s", fileName, elapsedTime)
-		}(tabName, config.URL)
+	categoryMap := config.CategoryMap
+	if config.Target == "week" {
+		categoryMap = config.WeekCategoryMap
 	}
+	log.Println("=== target:", config.Target, "===")
+
+	processCategoryMap(config, categoryMap, f, sem, &wg)
 
 	wg.Wait()
 
@@ -64,7 +56,7 @@ func main() {
 	formattedTime := time.Now().Format("2006_01_02")
 
 	// 保存 Excel 文件
-	outputFilePath := fmt.Sprintf("%s/output_%s.xlsx", config.OutputPath, formattedTime)
+	outputFilePath := fmt.Sprintf("%s/%s_%s.xlsx", config.OutputPath, config.Target, formattedTime)
 	mu.Lock()
 	if err := f.SaveAs(outputFilePath); err != nil {
 		log.Fatal(err)
@@ -90,6 +82,27 @@ func GetConfig(path string) Config {
 		log.Fatal(err)
 	}
 	return config
+}
+
+func processCategoryMap(config Config, categoryMap map[string][]string, f *excelize.File, sem chan struct{}, wg *sync.WaitGroup) {
+	for fileName, categoryList := range categoryMap {
+		wg.Add(1)
+		go func(fileName, url string) {
+			defer wg.Done()
+			sem <- struct{}{}        // 獲取信號量
+			defer func() { <-sem }() // 釋放信號量
+
+			startTime := time.Now()
+			log.Printf("Processing %s", fileName)
+			err := processURL(fileName, config, categoryList, f)
+			if err != nil {
+				log.Printf("Error processing %s: %v", fileName, err)
+				return
+			}
+			elapsedTime := time.Since(startTime).Round(time.Second)
+			log.Printf("Finished %s took %s", fileName, elapsedTime)
+		}(fileName, config.URL)
+	}
 }
 
 func processURL(fileName string, config Config, categoryList []string, f *excelize.File) error {
@@ -163,7 +176,6 @@ func DownloadFileByOptions(ctx context.Context, browser *rod.Browser, url string
 		case <-ctx.Done():
 			return nil, errors.New("Timeout")
 		default:
-
 		}
 	}
 
