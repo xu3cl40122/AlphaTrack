@@ -135,6 +135,7 @@ func CreateBrowser(headless bool) *rod.Browser {
 	} else {
 		launcher = launcher.Headless(false)
 	}
+	launcher.Leakless(true)
 
 	browser := rod.New().ControlURL(launcher.MustLaunch()).MustConnect()
 	return browser
