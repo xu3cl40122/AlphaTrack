@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +14,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/xuri/excelize/v2"
+	"github.com/xu3cl40122/AlphaTrack/util" // Import the util package
 )
 
 type Config struct {
@@ -27,6 +26,7 @@ type Config struct {
 	OutputPath      string              `json:"outputPath"`
 	CountOptionList []string            `json:"countOptionList"`
 	ConcurrentCount int                 `json:"concurrentCount"`
+	Timeout         int                 `json:"timeout"` // Timeout in seconds
 }
 
 func main() {
@@ -34,10 +34,11 @@ func main() {
 	log.Println("=== Start ===")
 	startTime := time.Now()
 	config := GetConfig("./config.json")
+	outputFilePath := composeFileName(config)
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 
-	f := excelize.NewFile()
+	excelFile := excelize.NewFile()
+	existingTabs, excelFile := checkExistedTabs(outputFilePath, excelFile)
 
 	// 創建一個帶緩衝的 channel 作為信號量，限制同時運行的 goroutine 數量
 	sem := make(chan struct{}, config.ConcurrentCount)
@@ -48,21 +49,38 @@ func main() {
 	}
 	log.Println("=== target:", config.Target, "===")
 
-	processCategoryMap(config, categoryMap, f, sem, &wg)
+	processCategoryMap(config, categoryMap, excelFile, sem, &wg, existingTabs)
 
 	wg.Wait()
 
-	// 獲取當前時間並格式化
-	formattedTime := time.Now().Format("2006_01_02")
-
-	// 保存 Excel 文件
-	outputFilePath := fmt.Sprintf("%s/%s_%s.xlsx", config.OutputPath, config.Target, formattedTime)
-	mu.Lock()
-	if err := f.SaveAs(outputFilePath); err != nil {
+	if err := excelFile.SaveAs(outputFilePath); err != nil {
 		log.Fatal(err)
+		return
 	}
-	mu.Unlock()
+	log.Println("Save output file", outputFilePath)
 	log.Println("=== Finished ===", "Time:", time.Since(startTime).Round(time.Second))
+}
+
+func checkExistedTabs(outputFilePath string, f *excelize.File) (map[string]bool, *excelize.File) {
+	existingTabs := make(map[string]bool)
+
+	// 檢查是否已經存在的 Excel 文件
+	if _, err := os.Stat(outputFilePath); err == nil {
+		f, err = excelize.OpenFile(outputFilePath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, sheetName := range f.GetSheetList() {
+			existingTabs[sheetName] = true
+		}
+	}
+	return existingTabs, f
+}
+
+func composeFileName(config Config) string {
+	formattedTime := time.Now().Format("2006_01_02")
+	outputFilePath := fmt.Sprintf("%s/%s_%s.xlsx", config.OutputPath, config.Target, formattedTime)
+	return outputFilePath
 }
 
 func GetConfig(path string) Config {
@@ -84,41 +102,45 @@ func GetConfig(path string) Config {
 	return config
 }
 
-func processCategoryMap(config Config, categoryMap map[string][]string, f *excelize.File, sem chan struct{}, wg *sync.WaitGroup) {
+func processCategoryMap(config Config, categoryMap map[string][]string, f *excelize.File, sem chan struct{}, wg *sync.WaitGroup, existingTabs map[string]bool) {
 	for fileName, categoryList := range categoryMap {
+		if existingTabs[fileName] {
+			log.Printf("Skipping %s as it already exists", fileName)
+			continue
+		}
 		wg.Add(1)
-		go func(fileName, url string) {
+		go func(tabName, url string) {
 			defer wg.Done()
 			sem <- struct{}{}        // 獲取信號量
 			defer func() { <-sem }() // 釋放信號量
 
 			startTime := time.Now()
-			log.Printf("Processing %s", fileName)
-			err := processURL(fileName, config, categoryList, f)
+			log.Printf("Processing %s", tabName)
+			err := util.DoWithTimeout(time.Duration(300)*time.Second, func() error {
+				return processSingleTab(tabName, config, categoryList, f)
+			})
 			if err != nil {
-				log.Printf("Error processing %s: %v", fileName, err)
+				log.Printf("Error processing %s: %v", tabName, err)
 				return
 			}
 			elapsedTime := time.Since(startTime).Round(time.Second)
-			log.Printf("Finished %s took %s", fileName, elapsedTime)
+			log.Printf("Finished %s took %s", tabName, elapsedTime)
 		}(fileName, config.URL)
 	}
 }
 
-func processURL(fileName string, config Config, categoryList []string, f *excelize.File) error {
+func processSingleTab(tabName string, config Config, categoryList []string, f *excelize.File) error {
 	browser := CreateBrowser(config.Headless)
 	defer browser.MustClose()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 
-	fileContentList, err := DownloadFileByOptions(ctx, browser, config.URL, categoryList, config.CountOptionList)
+	fileContentList, err := DownloadFileByOptions(browser, config.URL, categoryList, config.CountOptionList, config.Timeout)
 	if err != nil {
-		return fmt.Errorf("error downloading files for %s: %w", fileName, err)
+		return fmt.Errorf("error downloading files for %s: %w", tabName, err)
 	}
 
-	err = aggregateCsvDataToExcel(fileContentList, f, fileName)
+	err = aggregateCsvDataToExcel(fileContentList, f, tabName)
 	if err != nil {
-		return fmt.Errorf("error aggregating CSV data for %s: %w", fileName, err)
+		return fmt.Errorf("error aggregating CSV data for %s: %w", tabName, err)
 	}
 
 	return nil
@@ -150,9 +172,9 @@ func getSelectorIdByIndex(i int) string {
 	}
 	return ""
 }
-
-func DownloadFileByOptions(ctx context.Context, browser *rod.Browser, url string, categoryList []string, countOptionList []string) ([][]byte, error) {
-	page := browser.MustPage(url)
+// todo: error handling
+func DownloadFileByOptions(browser *rod.Browser, url string, categoryList []string, countOptionList []string, timeout int) ([][]byte, error) {
+	page := browser.MustPage(url).Timeout(time.Duration(timeout) * time.Second)
 	page.MustWaitLoad()
 	output := make([][]byte, 0)
 
@@ -172,12 +194,6 @@ func DownloadFileByOptions(ctx context.Context, browser *rod.Browser, url string
 
 		fileContent := wait()
 		output = append(output, fileContent)
-
-		select {
-		case <-ctx.Done():
-			return nil, errors.New("Timeout")
-		default:
-		}
 	}
 
 	return output, nil
