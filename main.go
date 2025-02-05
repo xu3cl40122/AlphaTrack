@@ -116,7 +116,7 @@ func processCategoryMap(config Config, categoryMap map[string][]string, f *excel
 
 			startTime := time.Now()
 			log.Printf("Processing %s", tabName)
-			err := util.DoWithTimeout(time.Duration(300)*time.Second, func() error {
+			err := util.DoWithTimeout(time.Duration(config.Timeout)*time.Second, func() error {
 				return processSingleTab(tabName, config, categoryList, f)
 			})
 			if err != nil {

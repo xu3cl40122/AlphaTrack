@@ -43,8 +43,8 @@
   },
   "countOptionList": ["1~300", "301~600", "601~900"],
   "headless": true,
-  "target": "week",
+  "target": "day",
   "conCurrentCount": 5,
-  "timeout": 60,
+  "timeout": 600,
   "outputPath": "./output"
 }

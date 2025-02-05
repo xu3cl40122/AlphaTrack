@@ -2,6 +2,10 @@
 針對 https://goodinfo.tw/tw/StockList.asp 這個網站進行爬蟲的程式會將爬取的資料彙整成 excel 輸出
 github: https://github.com/xu3cl40122/AlphaTrack
 
+## 如何使用
+1. 安裝 go https://go.dev/doc/install
+1. 
+
 ## 可設定的參數
 可透過改動 config.json 調整設定
 ``` javascript 
