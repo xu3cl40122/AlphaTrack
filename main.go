@@ -8,7 +8,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -29,7 +31,20 @@ type Config struct {
 	Timeout         int                 `json:"timeout"` // Timeout in seconds
 }
 
+var browsers []*rod.Browser
+
 func main() {
+	// Handle termination signals to clean up browser processes
+	cleanup := make(chan os.Signal, 1)
+	signal.Notify(cleanup, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-cleanup
+		for _, browser := range browsers {
+			browser.MustClose()
+		}
+		os.Exit(0)
+	}()
+
 	// 讀取 JSON 設定檔
 	log.Println("=== Start ===")
 	startTime := time.Now()
@@ -118,11 +133,11 @@ func processCategoryMap(config Config, categoryMap map[string][]string, f *excel
 			startTime := time.Now()
 			log.Printf("Processing %s", tabName)
 			err := util.DoWithTimeout(time.Duration(config.Timeout)*time.Second, func() error {
-				return processSingleTab(tabName, config, categoryList, f)
+				processSingleTab(tabName, config, categoryList, f)
+				return nil
 			})
 			if err != nil {
 				log.Printf("Error processing %s: %v", tabName, err)
-				return
 			}
 			elapsedTime := time.Since(startTime).Round(time.Second)
 			log.Printf("Finished %s took %s", tabName, elapsedTime)
@@ -130,21 +145,21 @@ func processCategoryMap(config Config, categoryMap map[string][]string, f *excel
 	}
 }
 
-func processSingleTab(tabName string, config Config, categoryList []string, f *excelize.File) error {
+func processSingleTab(tabName string, config Config, categoryList []string, f *excelize.File) {
 	browser := CreateBrowser(config.Headless)
 	defer browser.MustClose()
+	browsers = append(browsers, browser)
 
 	fileContentList, err := DownloadFileByOptions(browser, config.URL, categoryList, config.CountOptionList, config.Timeout)
 	if err != nil {
-		return fmt.Errorf("error downloading files for %s: %w", tabName, err)
+		log.Printf("Error downloading files for %s: %v", tabName, err)
+		return
 	}
 
 	err = aggregateCsvDataToExcel(fileContentList, f, tabName)
 	if err != nil {
-		return fmt.Errorf("error aggregating CSV data for %s: %w", tabName, err)
+		log.Printf("Error aggregating CSV data for %s: %v", tabName, err)
 	}
-
-	return nil
 }
 
 func CreateBrowser(headless bool) *rod.Browser {
@@ -173,7 +188,7 @@ func getSelectorIdByIndex(i int) string {
 	}
 	return ""
 }
-// todo: error handling
+
 func DownloadFileByOptions(browser *rod.Browser, url string, categoryList []string, countOptionList []string, timeout int) ([][]byte, error) {
 	page := browser.MustPage(url).Timeout(time.Duration(timeout) * time.Second)
 	page.MustWaitLoad()
@@ -181,16 +196,28 @@ func DownloadFileByOptions(browser *rod.Browser, url string, categoryList []stri
 
 	for _, option := range countOptionList {
 		for i, category := range categoryList {
-			selectNodeOfCategory := page.MustElement(getSelectorIdByIndex(i))
+			selectNodeOfCategory, err := page.Element(getSelectorIdByIndex(i))
+			if err != nil {
+				log.Printf("Error finding element for category %s: %v", category, err)
+				continue
+			}
 			selectNodeOfCategory.MustSelect(category)
 			page.MustWaitStable()
 		}
-		selectNodeOfCount := page.MustElement(`#selRANK`)
+		selectNodeOfCount, err := page.Element(`#selRANK`)
+		if err != nil {
+			log.Printf("Error finding element for count option: %v", err)
+			continue
+		}
 		selectNodeOfCount.MustSelect(option)
 		page.MustWaitStable()
 
 		wait := browser.MustWaitDownload()
-		button := page.MustElement(`input[value="匯出CSV"]`)
+		button, err := page.Element(`input[value="匯出CSV"]`)
+		if err != nil {
+			log.Printf("Error finding export button: %v", err)
+			continue
+		}
 		button.MustClick()
 
 		fileContent := wait()
