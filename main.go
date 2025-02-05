@@ -31,10 +31,15 @@ type Config struct {
 	Timeout         int                 `json:"timeout"` // Timeout in seconds
 }
 
-var browsers []*rod.Browser
+var (
+	browsers []*rod.Browser
+	mu       sync.Mutex
+	excelFile *excelize.File
+	outputFilePath string
+)
 
 func main() {
-	// Handle termination signals to clean up browser processes
+	// Handle termination signals to clean up browser processes and save the file
 	cleanup := make(chan os.Signal, 1)
 	signal.Notify(cleanup, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -42,17 +47,17 @@ func main() {
 		for _, browser := range browsers {
 			browser.MustClose()
 		}
-		os.Exit(0)
+		saveFileAndExit()
 	}()
 
 	// 讀取 JSON 設定檔
 	log.Println("=== Start ===")
 	startTime := time.Now()
 	config := GetConfig("./config.json")
-	outputFilePath := composeFileName(config)
+	outputFilePath = composeFileName(config)
 	var wg sync.WaitGroup
 
-	excelFile := excelize.NewFile()
+	excelFile = excelize.NewFile()
 	existingTabs, excelFile := checkExistedTabs(outputFilePath, excelFile)
 
 	// 創建一個帶緩衝的 channel 作為信號量，限制同時運行的 goroutine 數量
@@ -65,16 +70,21 @@ func main() {
 	log.Println("=== target:", config.Target, "===")
 	log.Println("=== output file:", outputFilePath, "===")
 
-	processCategoryMap(config, categoryMap, excelFile, sem, &wg, existingTabs)
+	processCategoryMap(config, categoryMap, excelFile, sem, &wg, existingTabs, outputFilePath)
 
 	wg.Wait()
 
-	if err := excelFile.SaveAs(outputFilePath); err != nil {
-		log.Fatal(err)
-		return
-	}
-	log.Println("Save output file", outputFilePath)
+	saveFileAndExit()
 	log.Println("=== Finished ===", "Time:", time.Since(startTime).Round(time.Second))
+}
+
+func saveFileAndExit() {
+	mu.Lock()
+	defer mu.Unlock()
+	if err := excelFile.SaveAs(outputFilePath); err != nil {
+		log.Printf("Error saving file %s: %v", outputFilePath, err)
+	}
+	os.Exit(0)
 }
 
 func checkExistedTabs(outputFilePath string, f *excelize.File) (map[string]bool, *excelize.File) {
@@ -118,7 +128,7 @@ func GetConfig(path string) Config {
 	return config
 }
 
-func processCategoryMap(config Config, categoryMap map[string][]string, f *excelize.File, sem chan struct{}, wg *sync.WaitGroup, existingTabs map[string]bool) {
+func processCategoryMap(config Config, categoryMap map[string][]string, f *excelize.File, sem chan struct{}, wg *sync.WaitGroup, existingTabs map[string]bool, outputFilePath string) {
 	for fileName, categoryList := range categoryMap {
 		if existingTabs[fileName] {
 			log.Printf("Skipping %s as it already exists", fileName)
@@ -133,7 +143,7 @@ func processCategoryMap(config Config, categoryMap map[string][]string, f *excel
 			startTime := time.Now()
 			log.Printf("Processing %s", tabName)
 			err := util.DoWithTimeout(time.Duration(config.Timeout)*time.Second, func() error {
-				processSingleTab(tabName, config, categoryList, f)
+				processSingleTab(tabName, config, categoryList, f, outputFilePath)
 				return nil
 			})
 			if err != nil {
@@ -145,7 +155,7 @@ func processCategoryMap(config Config, categoryMap map[string][]string, f *excel
 	}
 }
 
-func processSingleTab(tabName string, config Config, categoryList []string, f *excelize.File) {
+func processSingleTab(tabName string, config Config, categoryList []string, f *excelize.File, outputFilePath string) {
 	browser := CreateBrowser(config.Headless)
 	defer browser.MustClose()
 	browsers = append(browsers, browser)
@@ -159,6 +169,14 @@ func processSingleTab(tabName string, config Config, categoryList []string, f *e
 	err = aggregateCsvDataToExcel(fileContentList, f, tabName)
 	if err != nil {
 		log.Printf("Error aggregating CSV data for %s: %v", tabName, err)
+		return
+	}
+
+	// Write to the output file immediately
+	mu.Lock()
+	defer mu.Unlock()
+	if err := f.SaveAs(outputFilePath); err != nil {
+		log.Printf("Error saving file %s: %v", outputFilePath, err)
 	}
 }
 
