@@ -4,7 +4,9 @@ github: https://github.com/xu3cl40122/AlphaTrack
 
 ## 如何使用
 1. 安裝 go https://go.dev/doc/install
-1. 
+1. 執行 run.bat
+* 目前如果目標檔案已經存在的 tab 不會再重新抓取, 所以如果在爬取過程有部分資料失敗可以重跑一次, 應該可以慢慢補齊沒抓到的部分
+
 
 ## 可設定的參數
 可透過改動 config.json 調整設定

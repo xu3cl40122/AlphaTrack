@@ -48,6 +48,7 @@ func main() {
 		categoryMap = config.WeekCategoryMap
 	}
 	log.Println("=== target:", config.Target, "===")
+	log.Println("=== output file:", outputFilePath, "===")
 
 	processCategoryMap(config, categoryMap, excelFile, sem, &wg, existingTabs)
 
