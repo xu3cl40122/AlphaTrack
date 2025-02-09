@@ -44,7 +44,7 @@
   "countOptionList": ["1~300", "301~600", "601~900"],
   "headless": true,
   "target": "day",
-  "conCurrentCount": 3,
+  "conCurrentCount": 1,
   "timeout": 600,
   "outputPath": "./output"
 }

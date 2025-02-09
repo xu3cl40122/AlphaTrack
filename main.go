@@ -160,7 +160,9 @@ func processSingleTab(tabName string, config Config, categoryList []string, f *e
 	defer browser.MustClose()
 	browsers = append(browsers, browser)
 
-	fileContentList, err := DownloadFileByOptions(browser, config.URL, categoryList, config.CountOptionList, config.Timeout)
+	fileContentList, err := withRetry(3, func() ([][]byte, error) {
+		return DownloadFileByOptions(browser, config.URL, categoryList, config.CountOptionList, config.Timeout)
+	})
 	if err != nil {
 		log.Printf("Error downloading files for %s: %v", tabName, err)
 		return
@@ -207,8 +209,29 @@ func getSelectorIdByIndex(i int) string {
 	return ""
 }
 
+func withRetry[T any](attempts int, f func() (T, error)) (result T, err error) {
+	for i := 0; i < attempts; i++ {
+			func() {
+					defer func() {
+							if r := recover(); r != nil {
+									err = fmt.Errorf("panic: %v", r)
+							}
+					}()
+					result, err = f()
+			}()
+			
+			if err == nil {
+					return result, nil
+			}
+			
+			time.Sleep(time.Second * time.Duration(i+1))
+	}
+	return result, fmt.Errorf("after %d attempts: %v", attempts, err)
+}
+
 func DownloadFileByOptions(browser *rod.Browser, url string, categoryList []string, countOptionList []string, timeout int) ([][]byte, error) {
 	page := browser.MustPage(url).Timeout(time.Duration(timeout) * time.Second)
+	defer page.Close()
 	page.MustWaitLoad()
 	output := make([][]byte, 0)
 
