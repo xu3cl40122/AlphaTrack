@@ -42,7 +42,7 @@
     "月營收": ["月營收統計", "月營收狀況"]
   },
   "countOptionList": ["1~300", "301~600", "601~900"],
-  "headless": true,
+  "headless": false,
   "target": "day",
   "conCurrentCount": 1,
   "timeout": 600,

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
+	"path/filepath"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/xuri/excelize/v2"
@@ -183,18 +183,22 @@ func processSingleTab(tabName string, config Config, categoryList []string, f *e
 }
 
 func CreateBrowser(headless bool) *rod.Browser {
-	uBlockPath := "./uBlock"
-	launcher := launcher.New().
-		Set("load-extension", uBlockPath).
-		Set("extensions-on-chrome-urls")
-
-	if headless {
-		launcher = launcher.Headless(true)
-	} else {
-		launcher = launcher.Headless(false)
+	// 取得當前執行檔案的目錄
+	exePath, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("無法獲取當前目錄: %v", err)
 	}
-	launcher.Leakless(false)
 
+	// 設定擴充功能的路徑
+	extensionPath := filepath.Join(exePath, "ublock")
+
+	// 初始化 launcher
+	launcher := launcher.New().Leakless(false).
+		Set("load-extension", extensionPath).
+		Set("extensions-on-chrome-urls").
+		Headless(headless)
+
+	// 啟動瀏覽器
 	browser := rod.New().ControlURL(launcher.MustLaunch()).MustConnect()
 	return browser
 }
